@@ -1,9 +1,4 @@
-build/
-out/
-*.dll
-*.so
-*.dylib
-*.exe
-*.obj
-*.pdb
+.zig-cache/
+zig-out/
+zig-pkg/
 .DS_Store

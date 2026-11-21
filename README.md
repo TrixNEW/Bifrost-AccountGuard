@@ -36,21 +36,19 @@ raise `min_age_days` are not re-checked until they reconnect.
 
 ## Requirements
 
-- Bifrost at API revision 9 or later (2.0.0-rc.18). On an older host the plugin refuses to load rather than skip the check.
+- Bifrost 2.0.0-rc.18 or later (API revision 9). On an older host the plugin refuses to load instead of skipping the check.
 - Managed sessions with authentication on. Admission isn't available in passthrough mode, and only one plugin per server can own it.
-- A C++23 compiler and CMake 3.20.
+- Zig 0.17.0.
 
 ## Build and install
 
 ```sh
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBIFROST_DIR=../Bifrost
-cmake --build build --config Release
-ctest --test-dir build -C Release
-cmake --install build --config Release --prefix ./stage
+zig build -Doptimize=ReleaseFast
+zig build test
 ```
 
-Copy `stage/plugins/AccountGuard.dll` (`.so` or `.dylib` elsewhere) and `AccountGuard.toml` into Bifrost's plugins directory.
-`BIFROST_DIR` defaults to a `Bifrost` checkout beside this one.
+Copy `zig-out/plugins/AccountGuard.dll` (`.so` or `.dylib` elsewhere) and `AccountGuard.toml` into Bifrost's plugins directory.
+The plugin builds against Bifrost's `bifrost_plugin` module, pinned in `build.zig.zon`.
 
 ## Configuration
 
@@ -64,19 +62,21 @@ Without the file the defaults apply. A key that is unknown, repeated or out of r
 | `missing_date` | `"deny"` | `"deny"` or `"allow"` for a login with no usable date. |
 | `exempt_xuids` | `[]` | Digits-only XUID strings on one line. |
 
-## Adding more account checks later
+## Layout
 
-`AccountAge.hpp` holds the rule as a pure function of the config, the verified XUID, the date and the clock. `AccountGuard.hpp`
-is the only place that touches the host. Another check built on Bifrost's `player_account` fits beside `judge` without
-touching the glue. `player_account` can grow new fields without breaking plugins built against the older layout.
+- `src/policy.zig`: the rule, a pure function of the config, the verified XUID, the date and the clock.
+- `src/guard.zig`: the only code that talks to the host.
+- `src/config.zig`: the settings parser. Everything the login path reads is built once at load, so a check never allocates.
+- `src/library.zig`: finds the directory the plugin was loaded from.
+
+Another check built on `player_account` fits beside `judge` without touching the glue. `player_account` can grow new
+fields without breaking plugins built against the older layout.
 
 ## Tests
 
-`ctest` runs `tests/Tests.cpp`, which covers the age threshold, invalid, missing and future dates, exemptions, config
-parsing (including the shipped example) and the admission outcomes against a fake host: refusal with the custom message,
-the cancel fallback, and failing closed.
-
-Bifrost's own suite covers `player_account` and refusal by holding the login and disconnecting.
+`zig build test` covers the age threshold, missing, invalid and future dates, exemptions, config parsing (including the
+shipped example and allocation failures) and the admission outcomes against a fake host: refusal with the custom message,
+the cancel fallback, and failing closed. Bifrost's own suite covers `player_account` and refusal by holding the login.
 
 ## License
 
