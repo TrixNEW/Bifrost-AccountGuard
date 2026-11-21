@@ -1,0 +1,9 @@
+build/
+out/
+*.dll
+*.so
+*.dylib
+*.exe
+*.obj
+*.pdb
+.DS_Store

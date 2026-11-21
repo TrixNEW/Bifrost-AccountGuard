@@ -1,0 +1,16 @@
+# Beside AccountGuard.dll / .so / .dylib in the plugins directory. A missing file means these defaults.
+# A key that is misspelled, repeated or out of range stops the plugin from loading rather than weakening the check.
+
+# How old a PlayFab account must be, in days, before it may join. 0 turns the check off.
+min_age_days = 30
+
+# Shown to a player who is turned away. {days} becomes min_age_days.
+kick_message = "Your account is too new to play here. Please come back when it is {days} days old."
+
+# What to do with a login that carries no usable creation date: "deny" or "allow".
+# Chain-format logins, offline logins and missing, malformed or far-future dates all count as missing.
+missing_date = "deny"
+
+# XUIDs that skip the check. Only an Xbox-verified XUID matches, so list digits, never names.
+exempt_xuids = []
+# exempt_xuids = ["2535400000000001", "2535400000000002"]

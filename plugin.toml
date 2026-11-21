@@ -1,0 +1,3 @@
+name = "AccountGuard"
+version = "1.0.0"
+description = "Refuses logins whose PlayFab account is newer than a minimum age, before any backend sees them"
