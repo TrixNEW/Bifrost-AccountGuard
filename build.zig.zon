@@ -8,6 +8,10 @@
             .url = "git+https://github.com/TrixNEW/Bifrost#ed3ee97e1ab2a1f980642654a46c463706669394",
             .hash = "bifrost-2.0.0-rc.18-YxnEV5MoFgDLnsVXlk1NBWi7b0vBQY0EK8f3nLHqvz2-",
         },
+        .toml = .{
+            .url = "git+https://github.com/sam701/zig-toml#6456172ac3526c49b2127885413d7caed8240753",
+            .hash = "toml-0.3.0-bV14BYKmAQD6bVRoXkfw2YIDJMFlvNTxC6DfdDn_bHy4",
+        },
     },
     .paths = .{ "build.zig", "build.zig.zon", "src", "tests", "tests.zig", "config", "plugin.toml", "README.md", "LICENSE" },
 }

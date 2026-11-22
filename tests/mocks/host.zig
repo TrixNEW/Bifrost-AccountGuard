@@ -27,8 +27,11 @@ pub const Fake = struct {
         self.raw.player_info = playerInfo;
         self.raw.player_account = playerAccount;
         self.raw.disconnect = disconnect;
-        self.verified(vip, true, .authenticated);
-        self.created(now - 90 * day);
+        self.info.state.authentication = .authenticated;
+        self.info.online = 1;
+        const xuid = std.fmt.comptimePrint("{d}", .{vip});
+        @memcpy(self.info.xuid[0..xuid.len], xuid);
+        self.info.xuid_len = xuid.len;
     }
 
     pub fn host(self: *Fake) bifrost.Host {
@@ -61,16 +64,6 @@ pub const Fake = struct {
         self.reason_len = @min(reason.slice().len, self.reason_buffer.len);
         @memcpy(self.reason_buffer[0..self.reason_len], reason.slice()[0..self.reason_len]);
         return self.disconnect_status;
-    }
-
-    pub fn verified(self: *Fake, xuid: u64, online: bool, state: abi.AuthenticationState) void {
-        self.info = .{};
-        self.info.state.authentication = state;
-        self.info.online = @intFromBool(online);
-        const text = std.fmt.bufPrint(&self.info.xuid, "{d}", .{xuid}) catch unreachable;
-        self.info.xuid_len = @intCast(text.len);
-        @memcpy(self.info.name[0..5], "Steve");
-        self.info.name_len = 5;
     }
 
     pub fn created(self: *Fake, seconds: i64) void {

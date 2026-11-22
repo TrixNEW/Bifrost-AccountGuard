@@ -28,6 +28,6 @@ Verified exemptions skip the age lookup. For everyone else, offline logins, toke
 
 AccountGuard holds refused logins and asks Bifrost to disconnect them with the configured message. If Bifrost cannot queue the disconnect, it cancels admission with its standard rejection message. Reconnects are checked again. Backend transfers reuse the admitted session.
 
-Configuration lives in `src/config`, account checks in `src/account`, and Bifrost admission handling in `src/admission.zig`. Run `zig build test` to check parsing, verified identity, age boundaries, and admission outcomes.
+Run `zig build test` to check parsing, verified identity, age boundaries, and admission outcomes.
 
 [Apache-2.0](LICENSE)

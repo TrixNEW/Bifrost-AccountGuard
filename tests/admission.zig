@@ -1,129 +1,96 @@
 const std = @import("std");
+const expectEqual = std.testing.expectEqual;
 const abi = @import("bifrost_plugin").abi;
 const admission = @import("../src/admission.zig");
-const config_mod = @import("../src/config/config.zig");
-const Config = config_mod.Config;
+const Config = @import("../src/utils/config.zig").Config;
 const Fake = @import("mocks/host.zig").Fake;
 
-fn login(fake: *Fake, config: Config, owner: bool) abi.TransferAction {
-    const guard: admission.Guard = .{ .host = fake.host(), .config = config };
+const minimum = 30 * Fake.day;
+const config: Config = .{ .min_age_s = minimum, .kick = "Come back in 30 days" };
+const player: abi.Player = .{ .id = 1 };
+
+fn login(fake: *Fake, settings: Config) abi.TransferAction {
     var decision: abi.TransferDecision = .{};
-    guard.admit(.{ .id = 1 }, if (owner) &decision else null, Fake.now);
+    admission.admit(fake.host(), &settings, player, &decision, Fake.now);
     return decision.action;
 }
 
-fn testConfig(days: i64, missing: config_mod.Missing, exempt: []const u64) Config {
-    return .{ .min_age_s = days * std.time.s_per_day, .missing = missing, .exempt_xuids = exempt, .kick = "Come back in 30 days" };
-}
-
-test "an old enough account goes straight on to a backend" {
+test "the age limit is inclusive and refusals hold or cancel admission" {
     var fake: Fake = undefined;
     fake.init();
-    try std.testing.expectEqual(abi.TransferAction.proceed, login(&fake, testConfig(30, .deny, &.{}), true));
-    try std.testing.expectEqual(@as(u32, 0), fake.disconnects);
-    try std.testing.expectEqual(@as(u32, 0), fake.info_calls);
-    try std.testing.expectEqual(@as(u32, 1), fake.account_calls);
-}
+    fake.created(Fake.now - minimum);
+    try expectEqual(.proceed, login(&fake, config));
+    try expectEqual(0, fake.info_calls);
+    try expectEqual(1, fake.account_calls);
+    try expectEqual(0, fake.disconnects);
 
-test "a new account is held off the backend and told why in the configured words" {
-    var fake: Fake = undefined;
-    fake.init();
-    fake.created(Fake.now - 2 * Fake.day);
-    try std.testing.expectEqual(abi.TransferAction.hold_login, login(&fake, testConfig(30, .deny, &.{}), true));
-    try std.testing.expectEqual(@as(u32, 1), fake.disconnects);
-    try std.testing.expectEqualStrings("Come back in 30 days", fake.reason_buffer[0..fake.reason_len]);
-}
-
-test "a disconnect that can't be queued still refuses, by cancelling" {
-    var fake: Fake = undefined;
-    fake.init();
-    fake.created(Fake.now - Fake.day);
+    fake.created(Fake.now - minimum + 1);
+    try expectEqual(.hold_login, login(&fake, config));
+    try std.testing.expectEqualStrings(config.kick, fake.reason_buffer[0..fake.reason_len]);
     fake.disconnect_status = .busy;
-    try std.testing.expectEqual(abi.TransferAction.cancel, login(&fake, testConfig(30, .deny, &.{}), true));
-    try std.testing.expectEqual(@as(u32, 1), fake.disconnects);
+    try expectEqual(.cancel, login(&fake, config));
+    try expectEqual(2, fake.disconnects);
 }
 
-test "no date follows missing_date, and a far-future date counts as none" {
+test "only usable dates count and the future tolerance is inclusive" {
     var fake: Fake = undefined;
     fake.init();
-    fake.account = .{};
-    try std.testing.expectEqual(abi.TransferAction.hold_login, login(&fake, testConfig(30, .deny, &.{}), true));
-    try std.testing.expectEqual(abi.TransferAction.proceed, login(&fake, testConfig(30, .allow, &.{}), true));
-
-    fake.created(Fake.now + 10 * Fake.day);
-    try std.testing.expectEqual(abi.TransferAction.hold_login, login(&fake, testConfig(30, .deny, &.{}), true));
-    try std.testing.expectEqual(abi.TransferAction.proceed, login(&fake, testConfig(30, .allow, &.{}), true));
+    const allow: Config = .{ .min_age_s = minimum, .missing = .allow };
+    const old = Fake.now - minimum;
+    for ([_]abi.PlayerAccount{
+        .{ .playfab_created_s = old },
+        .{ .playfab_created_s = old, .available = abi.account_playfab_created, .struct_size = 8 },
+        .{ .playfab_created_s = 0, .available = abi.account_playfab_created },
+        .{ .playfab_created_s = -1, .available = abi.account_playfab_created },
+        .{ .playfab_created_s = Fake.now + 301, .available = abi.account_playfab_created },
+    }) |account| {
+        fake.account = account;
+        try expectEqual(.hold_login, login(&fake, config));
+        try expectEqual(.proceed, login(&fake, allow));
+    }
+    fake.created(Fake.now + 300);
+    try expectEqual(.hold_login, login(&fake, allow));
+    fake.account_status = .failed;
+    try expectEqual(.hold_login, login(&fake, allow));
 }
 
-test "failing to learn anything about the player refuses, even where a missing date is allowed" {
-    const allow = testConfig(30, .allow, &.{});
+test "only an authenticated online identity with a complete XUID skips the age lookup" {
     var fake: Fake = undefined;
     fake.init();
+    const exempt: Config = .{ .min_age_s = minimum, .missing = .allow, .exempt_xuids = &.{ 1, Fake.vip, Fake.vip + 1 } };
+    fake.created(Fake.now);
+    try expectEqual(.proceed, login(&fake, exempt));
+    try expectEqual(1, fake.info_calls);
+    try expectEqual(0, fake.account_calls);
+
+    const verified = fake.info;
+    fake.info.online = 0;
+    try expectEqual(.hold_login, login(&fake, exempt));
+    fake.info = verified;
+    fake.info.state.authentication = .pending;
+    try expectEqual(.hold_login, login(&fake, exempt));
+    fake.info = verified;
+    fake.info.struct_size = @offsetOf(abi.PlayerInfo, "xuid") + verified.xuid_len - 1;
+    try expectEqual(.hold_login, login(&fake, exempt));
+    fake.info = verified;
+    fake.info.xuid_len = 1000;
+    try expectEqual(.hold_login, login(&fake, exempt));
+
+    try expectEqual(4, fake.account_calls);
     fake.info_status = .stale_handle;
-    try std.testing.expectEqual(abi.TransferAction.hold_login, login(&fake, testConfig(30, .allow, &.{Fake.vip}), true));
-    fake.init();
-    fake.account_status = .failed;
-    try std.testing.expectEqual(abi.TransferAction.hold_login, login(&fake, allow, true));
+    try expectEqual(.hold_login, login(&fake, exempt));
+    try expectEqual(4, fake.account_calls);
 }
 
-test "exemptions apply only to a verified XUID" {
-    const config = testConfig(30, .deny, &.{Fake.vip});
+test "disabled or previously decided admissions make no host calls" {
     var fake: Fake = undefined;
     fake.init();
-    fake.created(Fake.now - Fake.day);
-    fake.account_status = .failed;
-    try std.testing.expectEqual(abi.TransferAction.proceed, login(&fake, config, true));
-    try std.testing.expectEqual(@as(u32, 1), fake.info_calls);
-    try std.testing.expectEqual(@as(u32, 0), fake.account_calls);
-    fake.account_status = .ok;
-
-    fake.verified(Fake.vip, false, .authenticated);
-    try std.testing.expectEqual(abi.TransferAction.hold_login, login(&fake, config, true));
-    fake.verified(Fake.vip, true, .pending);
-    try std.testing.expectEqual(abi.TransferAction.hold_login, login(&fake, config, true));
-    fake.verified(Fake.vip, true, .authenticated);
-    fake.info.xuid_len = 0;
-    try std.testing.expectEqual(abi.TransferAction.hold_login, login(&fake, config, true));
-    fake.verified(Fake.vip, true, .authenticated);
-    @memcpy(fake.info.xuid[0..5], "Steve");
-    fake.info.xuid_len = 5;
-    try std.testing.expectEqual(abi.TransferAction.hold_login, login(&fake, config, true));
-}
-
-test "turned off, nothing is asked of the host and nobody is refused" {
-    var fake: Fake = undefined;
-    fake.init();
-    fake.info_status = .failed;
-    try std.testing.expectEqual(abi.TransferAction.proceed, login(&fake, testConfig(0, .deny, &.{}), true));
-    try std.testing.expectEqual(@as(u32, 0), fake.info_calls);
-    try std.testing.expectEqual(@as(u32, 0), fake.account_calls);
-}
-
-test "without a decision pointer there is nothing to refuse" {
-    var fake: Fake = undefined;
-    fake.init();
-    fake.created(Fake.now - Fake.day);
-    try std.testing.expectEqual(abi.TransferAction.proceed, login(&fake, testConfig(30, .deny, &.{}), false));
-    try std.testing.expectEqual(@as(u32, 0), fake.disconnects);
-    try std.testing.expectEqual(@as(u32, 0), fake.account_calls);
-}
-
-test "a host that predates player_account is refused up front" {
-    var fake: Fake = undefined;
-    fake.init();
-    try std.testing.expect(admission.supported(fake.host()));
-    fake.raw.struct_size = @offsetOf(abi.Host, "player_account");
-    try std.testing.expect(!admission.supported(fake.host()));
-}
-
-test "an existing admission action is preserved" {
-    var fake: Fake = undefined;
-    fake.init();
-    fake.account_status = .failed;
-    const guard: admission.Guard = .{ .host = fake.host(), .config = testConfig(30, .deny, &.{}) };
+    try expectEqual(.proceed, login(&fake, .{ .min_age_s = 0 }));
     var decision: abi.TransferDecision = .{ .action = .cancel };
-    guard.admit(.{ .id = 1 }, &decision, Fake.now);
-    try std.testing.expectEqual(abi.TransferAction.cancel, decision.action);
-    try std.testing.expectEqual(@as(u32, 0), fake.account_calls);
-    try std.testing.expectEqual(@as(u32, 0), fake.disconnects);
+    admission.admit(fake.host(), &config, player, &decision, Fake.now);
+    try expectEqual(.cancel, decision.action);
+    admission.admit(fake.host(), &config, player, null, Fake.now);
+    try expectEqual(0, fake.info_calls);
+    try expectEqual(0, fake.account_calls);
+    try expectEqual(0, fake.disconnects);
 }

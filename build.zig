@@ -4,7 +4,11 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const sdk = b.dependency("bifrost", .{ .target = target, .optimize = optimize }).module("bifrost_plugin");
-    const imports: []const std.Build.Module.Import = &.{.{ .name = "bifrost_plugin", .module = sdk }};
+    const toml = b.dependency("toml", .{ .target = target, .optimize = optimize }).module("toml");
+    const imports: []const std.Build.Module.Import = &.{
+        .{ .name = "bifrost_plugin", .module = sdk },
+        .{ .name = "toml", .module = toml },
+    };
 
     const plugin = b.addLibrary(.{
         .name = "AccountGuard",
@@ -14,7 +18,6 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = imports,
-            // dladdr finds the library's own directory on Linux and macOS
             .link_libc = target.result.os.tag != .windows,
         }),
     });
