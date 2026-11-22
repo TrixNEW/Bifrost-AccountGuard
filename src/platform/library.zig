@@ -21,9 +21,10 @@ fn windowsPath(buffer: []u8) ?[]const u8 {
     if (builtin.os.tag != .windows) unreachable;
     var module: ?std.os.windows.HMODULE = null;
     if (windows.GetModuleHandleExW(windows.from_address | windows.unchanged_refcount, @ptrCast(&directory), &module) == 0) return null;
-    var wide: [std.fs.max_path_bytes]u16 = undefined;
+    var wide: [std.os.windows.PATH_MAX_WIDE]u16 = undefined;
     const len = windows.GetModuleFileNameW(module, &wide, wide.len);
     if (len == 0 or len >= wide.len) return null;
+    if (std.unicode.calcWtf8Len(wide[0..len]) > buffer.len) return null;
     const bytes = std.unicode.wtf16LeToWtf8(buffer, wide[0..len]);
     return buffer[0..bytes];
 }

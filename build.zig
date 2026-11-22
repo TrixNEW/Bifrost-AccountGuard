@@ -24,7 +24,7 @@ pub fn build(b: *std.Build) void {
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(b.path("config/AccountGuard.toml"), .{ .custom = "plugins" }, "AccountGuard.toml").step);
 
     const tests = b.addTest(.{ .root_module = b.createModule(.{
-        .root_source_file = b.path("src/tests.zig"),
+        .root_source_file = b.path("tests.zig"),
         .target = target,
         .optimize = optimize,
         .imports = imports,

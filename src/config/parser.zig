@@ -1,40 +1,15 @@
 const std = @import("std");
-
+const config = @import("config.zig");
+const parseXuid = @import("../account/identity.zig").parseXuid;
 const Allocator = std.mem.Allocator;
-
-pub const seconds_per_day: i64 = std.time.s_per_day;
+const Config = config.Config;
+const Missing = config.Missing;
 pub const max_min_age_days = 36500;
 pub const max_kick_bytes = 512;
 pub const max_exempt = 65536;
-pub const max_file_bytes = 1 << 20;
 pub const default_kick = "Your account is too new to play here. Please come back when it is {days} days old.";
 
-pub const Missing = enum { deny, allow };
-
 const Key = enum { min_age_days, kick_message, missing_date, exempt_xuids };
-
-pub const Config = struct {
-    min_age_s: i64,
-    missing: Missing,
-    // sorted, no duplicates
-    exempt_xuids: []const u64,
-    // {days} already filled in
-    kick: []const u8,
-
-    pub fn deinit(self: *Config, gpa: Allocator) void {
-        gpa.free(self.exempt_xuids);
-        gpa.free(self.kick);
-        self.* = undefined;
-    }
-
-    pub fn exempt(self: *const Config, xuid: u64) bool {
-        return xuid != 0 and std.sort.binarySearch(u64, self.exempt_xuids, xuid, order) != null;
-    }
-
-    fn order(xuid: u64, item: u64) std.math.Order {
-        return std.math.order(xuid, item);
-    }
-};
 
 pub const Diagnostic = struct {
     buffer: [192]u8 = undefined,
@@ -46,15 +21,6 @@ pub const Diagnostic = struct {
     }
 };
 
-// same rule Bifrost uses for operators
-pub fn parseXuid(text: []const u8) ?u64 {
-    if (text.len == 0 or text.len > 20) return null;
-    for (text) |byte| if (!std.ascii.isDigit(byte)) return null;
-    const xuid = std.fmt.parseInt(u64, text, 10) catch return null;
-    return if (xuid == 0) null else xuid;
-}
-
-// unknown keys and bad values fail the load, so a typo can't loosen the check
 pub fn parse(gpa: Allocator, source: []const u8, diagnostic: *Diagnostic) (error{ InvalidConfig, OutOfMemory })!Config {
     var days: i64 = 30;
     var missing: Missing = .deny;
@@ -89,6 +55,7 @@ pub fn parse(gpa: Allocator, source: []const u8, diagnostic: *Diagnostic) (error
                 const rest = readString(gpa, &message, value) catch |err| return stringFailure(diagnostic, line_number, err);
                 if (rest.len != 0) return diagnostic.fail(line_number, "unexpected text after the string", .{});
                 if (message.items.len == 0 or message.items.len > max_kick_bytes) return diagnostic.fail(line_number, "kick_message must be 1 to {d} bytes", .{max_kick_bytes});
+                if (!std.unicode.utf8ValidateSlice(message.items)) return diagnostic.fail(line_number, "kick_message must be valid UTF-8", .{});
                 template = message.items;
             },
             .missing_date => {
@@ -120,13 +87,14 @@ pub fn parse(gpa: Allocator, source: []const u8, diagnostic: *Diagnostic) (error
         exempt.items[unique] = xuid;
         unique += 1;
     }
-    const xuids = try gpa.dupe(u64, exempt.items[0..unique]);
+    exempt.shrinkRetainingCapacity(unique);
+    const xuids = try exempt.toOwnedSlice(gpa);
     errdefer gpa.free(xuids);
     const kick = if (std.mem.indexOf(u8, template, "{days}")) |at|
         try std.fmt.allocPrint(gpa, "{s}{d}{s}", .{ template[0..at], days, template[at + "{days}".len ..] })
     else
         try gpa.dupe(u8, template);
-    return .{ .min_age_s = days * seconds_per_day, .missing = missing, .exempt_xuids = xuids, .kick = kick };
+    return .{ .min_age_s = days * std.time.s_per_day, .missing = missing, .exempt_xuids = xuids, .kick = kick };
 }
 
 fn trim(text: []const u8) []const u8 {
@@ -176,99 +144,4 @@ fn readString(gpa: Allocator, out: *std.ArrayList(u8), text: []const u8) StringE
         }
     }
     return error.Unclosed;
-}
-
-fn parseOk(source: []const u8) !Config {
-    var diagnostic: Diagnostic = .{};
-    return parse(std.testing.allocator, source, &diagnostic);
-}
-
-test "an empty file means the defaults" {
-    var config = try parseOk("");
-    defer config.deinit(std.testing.allocator);
-    try std.testing.expectEqual(30 * seconds_per_day, config.min_age_s);
-    try std.testing.expectEqual(Missing.deny, config.missing);
-    try std.testing.expectEqual(@as(usize, 0), config.exempt_xuids.len);
-    try std.testing.expect(std.mem.indexOf(u8, config.kick, "30 days") != null);
-}
-
-test "every setting is read, with comments, escapes and sorted unique XUIDs" {
-    var config = try parseOk(
-        \\# comment
-        \\min_age_days = 14 # trailing
-        \\kick_message = "Wait {days} days, \"friend\" # not a comment"
-        \\missing_date = "allow"
-        \\exempt_xuids = [ "2535400000000002", "2535400000000001", "2535400000000001" ]
-        \\
-    );
-    defer config.deinit(std.testing.allocator);
-    try std.testing.expectEqual(14 * seconds_per_day, config.min_age_s);
-    try std.testing.expectEqual(Missing.allow, config.missing);
-    try std.testing.expectEqualStrings("Wait 14 days, \"friend\" # not a comment", config.kick);
-    try std.testing.expectEqualSlices(u64, &.{ 2535400000000001, 2535400000000002 }, config.exempt_xuids);
-    try std.testing.expect(config.exempt(2535400000000001) and config.exempt(2535400000000002));
-    try std.testing.expect(!config.exempt(3) and !config.exempt(0));
-}
-
-test "windows line endings and a trailing comma are fine" {
-    var config = try parseOk("min_age_days = 7\r\nexempt_xuids = [\"5\",]\r\n");
-    defer config.deinit(std.testing.allocator);
-    try std.testing.expectEqual(7 * seconds_per_day, config.min_age_s);
-    try std.testing.expectEqualSlices(u64, &.{5}, config.exempt_xuids);
-}
-
-test "anything unknown, repeated or out of range is refused" {
-    const bad = [_][]const u8{
-        "min_age = 3\n",
-        "min_age_days = 30\nmin_age_days = 30\n",
-        "min_age_days = -1\n",
-        "min_age_days = 36501\n",
-        "min_age_days = \"30\"\n",
-        "min_age_days = 3.5\n",
-        "min_age_days\n",
-        "kick_message = \"\"\n",
-        "kick_message = Welcome\n",
-        "kick_message = \"open\n",
-        "kick_message = \"a\" extra\n",
-        "kick_message = \"bad \\n escape\"\n",
-        "missing_date = \"maybe\"\n",
-        "missing_date = allow\n",
-        "exempt_xuids = \"2535400000000001\"\n",
-        "exempt_xuids = [2535400000000001]\n",
-        "exempt_xuids = [\"Steve\"]\n",
-        "exempt_xuids = [\"0\"]\n",
-        "exempt_xuids = [\"-5\"]\n",
-        "exempt_xuids = [\"123456789012345678901\"]\n",
-        "exempt_xuids = [\"1\" \"2\"]\n",
-        "exempt_xuids = [\"1\",\n",
-    };
-    for (bad) |source| try std.testing.expectError(error.InvalidConfig, parseOk(source));
-}
-
-test "the kick message length is bounded" {
-    var body: [max_kick_bytes + 1]u8 = undefined;
-    @memset(&body, 'x');
-    var buffer: [max_kick_bytes + 32]u8 = undefined;
-    const fits = try std.fmt.bufPrint(&buffer, "kick_message = \"{s}\"\n", .{body[0..max_kick_bytes]});
-    var config = try parseOk(fits);
-    config.deinit(std.testing.allocator);
-    const over = try std.fmt.bufPrint(&buffer, "kick_message = \"{s}\"\n", .{&body});
-    try std.testing.expectError(error.InvalidConfig, parseOk(over));
-}
-
-test "a refusal says which line is wrong" {
-    var diagnostic: Diagnostic = .{};
-    try std.testing.expectError(error.InvalidConfig, parse(std.testing.allocator, "min_age_days = 3\nmissing_date = \"maybe\"\n", &diagnostic));
-    try std.testing.expectEqualStrings("line 2: missing_date must be \"deny\" or \"allow\"", diagnostic.text);
-}
-
-test "allocation failures never leak" {
-    const source = "min_age_days = 9\nkick_message = \"Wait {days}\"\nexempt_xuids = [\"2\", \"1\"]\n";
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, struct {
-        fn run(gpa: Allocator, text: []const u8) !void {
-            var diagnostic: Diagnostic = .{};
-            var config = try parse(gpa, text, &diagnostic);
-            config.deinit(gpa);
-        }
-    }.run, .{source});
 }

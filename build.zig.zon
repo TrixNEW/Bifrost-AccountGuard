@@ -1,7 +1,7 @@
 .{
     .name = .accountguard,
     .fingerprint = 0x7ea4e47d27a7a8ac,
-    .version = "1.1.0",
+    .version = "1.1.1",
     .minimum_zig_version = "0.17.0",
     .dependencies = .{
         .bifrost = .{
@@ -9,5 +9,5 @@
             .hash = "bifrost-2.0.0-rc.18-YxnEV5MoFgDLnsVXlk1NBWi7b0vBQY0EK8f3nLHqvz2-",
         },
     },
-    .paths = .{ "build.zig", "build.zig.zon", "src", "config", "plugin.toml", "README.md", "LICENSE" },
+    .paths = .{ "build.zig", "build.zig.zon", "src", "tests", "tests.zig", "config", "plugin.toml", "README.md", "LICENSE" },
 }
