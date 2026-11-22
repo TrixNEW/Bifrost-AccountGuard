@@ -6,6 +6,7 @@ const Allocator = std.mem.Allocator;
 
 const file_name = "AccountGuard.toml";
 const default_kick = "Your account is too new to play here. Please come back when it is {days} days old.";
+const max_exempt = 65536;
 const Key = enum { min_age_days, kick_message, missing_date, exempt_xuids };
 
 pub const Config = struct {
@@ -89,7 +90,7 @@ pub const Config = struct {
                     template = kick_buffer[0..value.string.len];
                 },
                 .exempt_xuids => {
-                    if (value != .array or value.array.items.len > 65536) return error.InvalidExemptXuids;
+                    if (value != .array or value.array.items.len > max_exempt) return error.InvalidExemptXuids;
                     const xuids = try gpa.alloc(u64, value.array.items.len);
                     config.exempt_xuids = xuids;
                     for (value.array.items, xuids) |item, *xuid| {
@@ -97,6 +98,13 @@ pub const Config = struct {
                         xuid.* = parseXuid(item.string) orelse return error.InvalidExemptXuids;
                     }
                     std.mem.sort(u64, xuids, {}, std.sort.asc(u64));
+                    var unique: usize = 0;
+                    for (xuids) |xuid| {
+                        if (unique != 0 and xuids[unique - 1] == xuid) continue;
+                        xuids[unique] = xuid;
+                        unique += 1;
+                    }
+                    if (unique != xuids.len) config.exempt_xuids = try gpa.realloc(xuids, unique);
                 },
             }
         }
@@ -112,6 +120,8 @@ pub const Config = struct {
 
 // Keep one flat assignment per line. zig-toml overwrites duplicate keys and parses nested values recursively.
 fn valueEnd(value: []const u8) !usize {
+    const array = value.len != 0 and value[0] == '[';
+    var commas: usize = 0;
     var quoted = false;
     var i: usize = 0;
     while (i < value.len) : (i += 1) {
@@ -130,6 +140,12 @@ fn valueEnd(value: []const u8) !usize {
             '#' => return i,
             '=', '{', '}', '\'' => return error.InvalidAssignment,
             '[' => if (i != 0) return error.InvalidAssignment,
+            ',' => if (array) {
+                commas += 1;
+                if (commas == max_exempt and
+                    !std.mem.startsWith(u8, std.mem.trimStart(u8, value[i + 1 ..], " \t\r"), "]"))
+                    return error.InvalidExemptXuids;
+            },
             '"' => {
                 if (std.mem.startsWith(u8, value[i..], "\"\"\"")) return error.InvalidAssignment;
                 quoted = true;

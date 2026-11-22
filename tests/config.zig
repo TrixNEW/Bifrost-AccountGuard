@@ -26,7 +26,7 @@ test "every setting is read with CRLF, comments, escapes and a trailing comma" {
     try testing.expectEqual(14 * day, config.min_age_s);
     try testing.expectEqual(.allow, config.missing);
     try testing.expectEqualStrings("Wait 14 days, \"friend\" # {days}", config.kick);
-    try testing.expectEqualSlices(u64, &.{ 2, 2, 9 }, config.exempt_xuids);
+    try testing.expectEqualSlices(u64, &.{ 2, 9 }, config.exempt_xuids);
 }
 
 test "invalid settings fail closed" {
@@ -76,8 +76,31 @@ test "invalid settings fail closed" {
 test "allocation failures never leak" {
     try testing.checkAllAllocationFailures(testing.allocator, struct {
         fn run(gpa: std.mem.Allocator) !void {
-            const config = try parse(gpa, "exempt_xuids = [\"2\"]\nkick_message = \"Wait {days}\"\nmin_age_days = 9");
+            const config = try parse(gpa, "exempt_xuids = [\"2\", \"2\"]\nkick_message = \"Wait {days}\"\nmin_age_days = 9");
             config.deinit(gpa);
         }
     }.run, .{});
+}
+
+test "the exemption limit allows a trailing comma and rejects larger lists before allocating" {
+    const prefix = "exempt_xuids = [";
+    const item = "\"1\",";
+    const limit = 65536;
+    const source = try testing.allocator.alloc(u8, prefix.len + (limit + 1) * item.len + 1);
+    defer testing.allocator.free(source);
+    @memcpy(source[0..prefix.len], prefix);
+    var offset: usize = prefix.len;
+    for (0..limit + 1) |_| {
+        @memcpy(source[offset..][0..item.len], item);
+        offset += item.len;
+    }
+    source[offset] = ']';
+    var no_memory = std.heap.FixedBufferAllocator.init(&.{});
+    try testing.expectError(error.InvalidExemptXuids, parse(no_memory.allocator(), source));
+
+    const end = offset - item.len;
+    source[end] = ']';
+    const config = try parse(testing.allocator, source[0 .. end + 1]);
+    defer config.deinit(testing.allocator);
+    try testing.expectEqualSlices(u64, &.{1}, config.exempt_xuids);
 }

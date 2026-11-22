@@ -27,10 +27,11 @@ pub fn init(server: bifrost.Host) !void {
         server.log(.err, "requires Bifrost API revision 9 or later", .{});
         return error.Unsupported;
     }
-    config = try Config.load(server, gpa);
-    errdefer config.deinit(gpa);
+    const loaded_config = try Config.load(server, gpa);
+    errdefer loaded_config.deinit(gpa);
+    if (loaded_config.min_age_s != 0) try server.on(.player_authenticated, onAuthenticated);
     host = server;
-    if (config.min_age_s != 0) try host.on(.player_authenticated, onAuthenticated);
+    config = loaded_config;
 }
 
 pub fn deinit() void {
